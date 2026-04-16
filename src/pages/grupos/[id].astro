@@ -1,0 +1,266 @@
+---
+// src/pages/grupos/[id].astro
+export const prerender = false;
+
+import Layout from "../../layouts/Layout.astro";
+import { createClient } from "@supabase/supabase-js";
+
+const accessToken = Astro.cookies.get("sb-access-token")?.value;
+const refreshToken = Astro.cookies.get("sb-refresh-token")?.value;
+
+if (!accessToken || !refreshToken) {
+    return Astro.redirect("/login");
+}
+
+const supabase = createClient(
+    import.meta.env.PUBLIC_SUPABASE_URL,
+    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+);
+
+await supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+});
+
+const { data: { user } } = await supabase.auth.getUser();
+
+if (!user) return Astro.redirect("/login");
+
+const { id } = Astro.params;
+
+// Traer el grupo
+const { data: grupo, error: grupoError } = await supabase
+    .from("grupos")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+if (grupoError || !grupo) {
+    return Astro.redirect("/dashboard");
+}
+
+// Traer participantes con sus perfiles
+const { data: participantes } = await supabase
+    .from("participantes")
+    .select(`
+        *,
+        perfiles(id, nombre, email)
+    `)
+    .eq("grupo_id", id);
+
+// Traer gastos con pagador y participantes
+const { data: gastos } = await supabase
+    .from("gastos")
+    .select(`
+        *,
+        perfiles(id, nombre, email),
+        gasto_participantes(
+        *,
+        perfiles(id, nombre, email)
+        )
+    `)
+    .eq("grupo_id", id)
+    .order("created_at", { ascending: false });
+---
+
+<Layout title={`${grupo.nombre} - SettleUp`}>
+    <div class="min-h-screen bg-gray-50">
+
+        <!-- Header -->
+        <header class="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div class="max-w-lg mx-auto px-4 py-4 flex items-center gap-3">
+            <a href="/dashboard" class="text-gray-400 hover:text-gray-600 transition-colors">
+            ‹ Volver
+            </a>
+            <h1 class="font-bold text-gray-900 flex-1 truncate">{grupo.nombre}</h1>
+            <button
+            id="btn-agregar-participante"
+            class="text-violet-600 text-sm font-medium hover:text-violet-800 transition-colors"
+            >
+            + Participante
+            </button>
+        </div>
+        </header>
+
+        <main class="max-w-lg mx-auto px-4 py-6 space-y-6">
+
+        <!-- Participantes -->
+        <section>
+            <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            Participantes ({participantes?.length ?? 0})
+            </h2>
+            <div class="flex flex-wrap gap-2">
+            {participantes?.map((p: any) => (
+                <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2">
+                <div class="w-7 h-7 bg-violet-100 rounded-full flex items-center justify-center text-xs font-bold text-violet-600">
+                    {(p.perfiles?.nombre ?? p.perfiles?.email ?? "?")[0].toUpperCase()}
+                </div>
+                <span class="text-sm text-gray-700">
+                    {p.perfiles?.nombre ?? p.perfiles?.email ?? "Usuario"}
+                </span>
+                {p.user_id === user.id && (
+                    <span class="text-xs text-violet-400">(vos)</span>
+                )}
+                </div>
+            ))}
+            </div>
+        </section>
+
+        <!-- Botón nuevo gasto -->
+        <button
+            id="btn-nuevo-gasto"
+            class="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-3 rounded-2xl transition-colors flex items-center justify-center gap-2"
+        >
+            <span>+</span>
+            <span>Agregar gasto</span>
+        </button>
+
+        <!-- Lista de gastos -->
+        <section>
+            <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            Gastos ({gastos?.length ?? 0})
+            </h2>
+
+            {gastos && gastos.length > 0 ? (
+            <div class="space-y-3">
+                {gastos.map((gasto: any) => (
+                <div class="bg-white rounded-2xl border border-gray-200 p-4">
+                    <div class="flex items-start justify-between">
+                    <div class="flex-1">
+                        <p class="font-medium text-gray-900">{gasto.descripcion}</p>
+                        <p class="text-xs text-gray-400 mt-0.5">
+                        Pagó {gasto.perfiles?.nombre ?? gasto.perfiles?.email ?? "?"}
+                        </p>
+                    </div>
+                    <span class="font-bold text-gray-900 text-lg">
+                        ${Number(gasto.monto).toLocaleString("es-AR")}
+                    </span>
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1">
+                    {gasto.gasto_participantes?.map((gp: any) => (
+                        <span class="text-xs bg-gray-100 text-gray-500 rounded-lg px-2 py-0.5">
+                        {gp.perfiles?.nombre ?? gp.perfiles?.email ?? "?"}: ${Number(gp.monto_individual).toLocaleString("es-AR")}
+                        </span>
+                    ))}
+                    </div>
+                </div>
+                ))}
+            </div>
+            ) : (
+            <div class="bg-white rounded-2xl border border-gray-200 p-8 text-center">
+                <div class="text-4xl mb-2">🧾</div>
+                <p class="text-gray-500 text-sm">No hay gastos todavía</p>
+                <p class="text-gray-400 text-xs mt-1">Agregá el primero</p>
+            </div>
+            )}
+        </section>
+
+        </main>
+    </div>
+
+    <!-- Modal: Agregar Participante -->
+    <div
+        id="modal-participante"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 hidden"
+    >
+        <div class="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+        <div class="flex items-center justify-between mb-5">
+            <h2 class="text-lg font-bold text-gray-900">Agregar Participante</h2>
+            <button id="btn-cerrar-participante" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+        </div>
+
+        <div id="error-participante" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-4 text-sm"></div>
+
+        <div class="space-y-4">
+            <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+                Email del participante
+            </label>
+            <input
+                type="email"
+                id="input-email-participante"
+                placeholder="amigo@email.com"
+                class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition text-sm"
+            />
+            <p class="text-xs text-gray-400 mt-1">
+                El participante debe tener una cuenta en SplitApp
+            </p>
+            </div>
+
+            <button
+            id="btn-confirmar-participante"
+            class="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
+            >
+            Agregar
+            </button>
+        </div>
+        </div>
+    </div>
+</Layout>
+
+<script>
+    const grupoId = window.location.pathname.split("/").pop();
+
+    // ── Modal participante ──
+    const modalP = document.getElementById("modal-participante")!;
+    const btnAgregarP = document.getElementById("btn-agregar-participante");
+    const btnCerrarP = document.getElementById("btn-cerrar-participante")!;
+    const btnConfirmarP = document.getElementById("btn-confirmar-participante")!;
+    const inputEmail = document.getElementById("input-email-participante") as HTMLInputElement;
+    const errorP = document.getElementById("error-participante")!;
+
+    btnAgregarP?.addEventListener("click", () => {
+        modalP.classList.remove("hidden");
+        setTimeout(() => inputEmail.focus(), 100);
+    });
+
+    btnCerrarP.addEventListener("click", () => {
+        modalP.classList.add("hidden");
+        inputEmail.value = "";
+        errorP.classList.add("hidden");
+    });
+
+    modalP.addEventListener("click", (e) => {
+        if (e.target === modalP) {
+        modalP.classList.add("hidden");
+        }
+    });
+
+    btnConfirmarP.addEventListener("click", async () => {
+        const email = inputEmail.value.trim();
+        if (!email) {
+        errorP.textContent = "El email es requerido";
+        errorP.classList.remove("hidden");
+        return;
+        }
+
+        btnConfirmarP.textContent = "Agregando...";
+        (btnConfirmarP as HTMLButtonElement).disabled = true;
+        errorP.classList.add("hidden");
+
+        try {
+        const res = await fetch("/api/grupos/agregar-participante", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grupo_id: grupoId, email }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            errorP.textContent = data.error ?? "Error al agregar participante";
+            errorP.classList.remove("hidden");
+            btnConfirmarP.textContent = "Agregar";
+            (btnConfirmarP as HTMLButtonElement).disabled = false;
+            return;
+        }
+
+        window.location.reload();
+        } catch (e) {
+        errorP.textContent = "Error de conexión";
+        errorP.classList.remove("hidden");
+        btnConfirmarP.textContent = "Agregar";
+        (btnConfirmarP as HTMLButtonElement).disabled = false;
+        }
+    });
+</script>

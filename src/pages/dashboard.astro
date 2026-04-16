@@ -1,0 +1,262 @@
+---
+// src/pages/dashboard.astro
+export const prerender = false;
+
+import Layout from "../layouts/Layout.astro";
+import { createClient } from "@supabase/supabase-js";
+
+const accessToken = Astro.cookies.get("sb-access-token")?.value;
+const refreshToken = Astro.cookies.get("sb-refresh-token")?.value;
+
+if (!accessToken || !refreshToken) {
+    return Astro.redirect("/login");
+}
+
+const supabase = createClient(
+    import.meta.env.PUBLIC_SUPABASE_URL,
+    import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+);
+
+await supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+});
+
+const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+if (userError || !user) {
+    return Astro.redirect("/login");
+}
+
+const { data: perfil } = await supabase
+    .from("perfiles")
+    .select("*")
+    .eq("id", user.id)
+    .single();
+
+const nombreUsuario = perfil?.nombre ?? user.email ?? "Usuario";
+
+// Traer grupos
+const { data: grupos } = await supabase
+    .from("grupos")
+    .select(`
+        *,
+        participantes(count),
+        gastos(count)
+    `)
+    .order("created_at", { ascending: false });
+---
+
+<Layout title="Mis grupos - SettleUp">
+    <div class="min-h-screen bg-gray-50">
+
+        <!-- Header -->
+        <header class="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div class="max-w-lg mx-auto px-4 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+            <span class="text-2xl"><img src="/logoSettleUp.webp" alt="Logo de la aplicación" class="mx-auto w-14 h-14" /></span>
+            <span class="font-bold text-gray-900">SettleUp</span>
+            </div>
+            <div class="flex items-center gap-3">
+            <span class="text-sm text-gray-500">
+                Hola, {nombreUsuario.split(" ")[0]} 👋
+            </span>
+            <form method="POST" action="/api/logout">
+                <button class="text-sm text-red-400 hover:text-red-600 transition-colors font-medium">
+                Salir
+                </button>
+            </form>
+            </div>
+        </div>
+        </header>
+
+        <!-- Contenido principal -->
+        <main class="max-w-lg mx-auto px-4 py-6">
+
+        <!-- Título y botón nuevo grupo -->
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-xl font-bold text-gray-900">Mis Grupos</h1>
+            <button
+            id="btn-nuevo-grupo"
+            class="bg-violet-600 text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-violet-700 transition-colors flex items-center gap-1"
+            >
+            <span>+</span>
+            <span>Nuevo grupo</span>
+            </button>
+        </div>
+
+        <!-- Lista de grupos -->
+        {grupos && grupos.length > 0 ? (
+            <div class="space-y-3" id="lista-grupos">
+            {grupos.map((grupo: any) => (
+                
+                <a href={`/grupos/${grupo.id}`}
+                class="block bg-white rounded-2xl border border-gray-200 p-4 hover:border-violet-300 hover:shadow-sm transition-all"
+                >
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-violet-100 rounded-xl flex items-center justify-center text-xl">
+                        🏷️
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-gray-900">{grupo.nombre}</h2>
+                        <p class="text-xs text-gray-400 mt-0.5">
+                        {grupo.participantes[0].count} participante{grupo.participantes[0].count !== 1 ? "s" : ""} ·{" "}
+                        {grupo.gastos[0].count} gasto{grupo.gastos[0].count !== 1 ? "s" : ""}
+                        </p>
+                    </div>
+                    </div>
+                    <span class="text-gray-300 text-lg">›</span>
+                </div>
+                </a>
+            ))}
+            </div>
+        ) : (
+            <div class="bg-white rounded-2xl border border-gray-200 p-10 text-center">
+            <div class="text-5xl mb-3">🧾</div>
+            <p class="font-medium text-gray-700">No tenés grupos todavía</p>
+            <p class="text-gray-400 text-sm mt-1">
+                Creá uno para empezar a dividir gastos
+            </p>
+            <button
+                id="btn-nuevo-grupo-empty"
+                class="mt-4 bg-violet-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-violet-700 transition-colors"
+            >
+                Crear mi primer grupo
+            </button>
+            </div>
+        )}
+
+        </main>
+    </div>
+
+    <!-- Modal: Nuevo Grupo -->
+    <div
+        id="modal-nuevo-grupo"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 hidden"
+    >
+        <div class="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+        <div class="flex items-center justify-between mb-5">
+            <h2 class="text-lg font-bold text-gray-900">Nuevo Grupo</h2>
+            <button
+            id="btn-cerrar-modal"
+            class="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+            >
+            ×
+            </button>
+        </div>
+
+        <!-- Error del modal -->
+        <div id="modal-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-4 text-sm">
+        </div>
+
+        <div class="space-y-4">
+            <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+                Nombre del grupo
+            </label>
+            <input
+                type="text"
+                id="input-nombre-grupo"
+                placeholder="Ej: Viaje a Bariloche"
+                class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition text-sm"
+            />
+            </div>
+
+            <button
+            id="btn-crear-grupo"
+            class="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-3 rounded-xl transition-colors text-sm"
+            >
+            Crear grupo
+            </button>
+        </div>
+        </div>
+    </div>
+</Layout>
+
+<script>
+    // Referencias
+    const modal = document.getElementById("modal-nuevo-grupo")!;
+    const btnNuevo = document.getElementById("btn-nuevo-grupo");
+    const btnNuevoEmpty = document.getElementById("btn-nuevo-grupo-empty");
+    const btnCerrar = document.getElementById("btn-cerrar-modal")!;
+    const btnCrear = document.getElementById("btn-crear-grupo")!;
+    const inputNombre = document.getElementById("input-nombre-grupo") as HTMLInputElement;
+    const modalError = document.getElementById("modal-error")!;
+
+    // Abrir modal
+    function abrirModal() {
+        modal.classList.remove("hidden");
+        setTimeout(() => inputNombre.focus(), 100);
+    }
+
+    // Cerrar modal
+    function cerrarModal() {
+        modal.classList.add("hidden");
+        inputNombre.value = "";
+        modalError.classList.add("hidden");
+        btnCrear.textContent = "Crear grupo";
+        (btnCrear as HTMLButtonElement).disabled = false;
+    }
+
+    btnNuevo?.addEventListener("click", abrirModal);
+    btnNuevoEmpty?.addEventListener("click", abrirModal);
+    btnCerrar.addEventListener("click", cerrarModal);
+
+    // Cerrar al hacer click fuera del modal
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) cerrarModal();
+    });
+
+    // Cerrar con Escape
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") cerrarModal();
+    });
+
+    // Crear grupo
+    btnCrear.addEventListener("click", async () => {
+        const nombre = inputNombre.value.trim();
+
+        if (!nombre) {
+        modalError.textContent = "El nombre del grupo es requerido";
+        modalError.classList.remove("hidden");
+        return;
+        }
+
+        btnCrear.textContent = "Creando...";
+        (btnCrear as HTMLButtonElement).disabled = true;
+        modalError.classList.add("hidden");
+
+        try {
+        const res = await fetch("/api/grupos/crear", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nombre }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            modalError.textContent = data.error ?? "Error al crear el grupo";
+            modalError.classList.remove("hidden");
+            btnCrear.textContent = "Crear grupo";
+            (btnCrear as HTMLButtonElement).disabled = false;
+            return;
+        }
+
+        // Redirigir al grupo recién creado
+        window.location.href = `/grupos/${data.grupo.id}`;
+
+        } catch (e) {
+        modalError.textContent = "Error de conexión";
+        modalError.classList.remove("hidden");
+        btnCrear.textContent = "Crear grupo";
+        (btnCrear as HTMLButtonElement).disabled = false;
+        }
+    });
+
+    // Crear con Enter
+    inputNombre.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") btnCrear.click();
+    });
+</script>
